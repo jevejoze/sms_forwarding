@@ -9,6 +9,7 @@
 #include "web_handlers.h"
 #include "sms_process.h"
 #include "web_handlers.h"
+#include "esim.h"
 
 void setup() {
   pinMode(LED_BUILTIN, OUTPUT);
@@ -67,6 +68,7 @@ void setup() {
   server.on("/log", handleLog);
   server.on("/modem", handleModem);
   server.on("/wifi", handleWifi);
+  server.on("/esim", handleESim);
   server.begin();
   logCaptureLn(String("HTTP服务器已启动"));
 
@@ -98,6 +100,19 @@ void setup() {
     String subject = "短信转发器已启动";
     String body = "设备已启动\n设备地址: " + getDeviceUrl();
     sendEmailNotification(subject.c_str(), body.c_str());
+  }
+
+  // ---- eSIM初始化 ----
+  logCaptureLn(String("初始化eSIM..."));
+  if (esimInit()) {
+    logCaptureLn(String("eSIM初始化成功"));
+    char eid[32];
+    if (esimGetEID(eid, sizeof(eid))) {
+      logCapture(String("EID: "));
+      logCaptureLn(eid);
+    }
+  } else {
+    logCaptureLn(String("eSIM初始化失败或未检测到eUICC芯片"));
   }
 
   // ---- 模组初始化（较慢，但网页已可访问） ----

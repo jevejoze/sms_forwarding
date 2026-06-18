@@ -205,6 +205,7 @@ const char* htmlPage = R"rawliteral(
       <a data-panel="diagnose"><span class="ico">📊</span> <span>模组诊断</span></a>
       <a data-panel="network"><span class="ico">🌐</span> <span>网络测试</span></a>
       <a data-panel="modem"><span class="ico">✈</span> <span>模组控制</span></a>
+      <a data-panel="esim"><span class="ico">📱</span> <span>eSIM 管理</span></a>
       <a data-panel="atterm"><span class="ico">💻</span> <span>AT 终端</span></a>
       <a data-panel="log"><span class="ico">📋</span> <span>系统日志</span></a>
     </nav>
@@ -408,6 +409,35 @@ const char* htmlPage = R"rawliteral(
       </div>
     </div>
 
+    <!-- ===== eSIM Management ===== -->
+    <div class="panel" id="panel-esim">
+      <h1 class="page-title">eSIM 管理</h1>
+      <p class="page-subtitle">管理 eUICC 芯片上的 eSIM 配置文件</p>
+      <div class="card">
+        <div class="card-header">📱 eSIM 状态</div>
+        <div class="card-body">
+          <div class="btn-row"><button class="btn btn-primary" onclick="esimAction('info')">查询 eSIM 信息</button><button class="btn btn-primary" onclick="esimAction('list')">刷新配置列表</button></div>
+          <div class="result-box" id="esimInfoResult"></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-header">📋 eSIM 配置列表</div>
+        <div class="card-body">
+          <div id="esimProfileList">
+            <p class="form-hint">点击"刷新配置列表"加载 eSIM 配置文件</p>
+          </div>
+          <div class="result-box" id="esimListResult"></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-header">🔔 通知管理</div>
+        <div class="card-body">
+          <div class="btn-row"><button class="btn btn-secondary" onclick="esimAction('notifcount')">查询通知数量</button><button class="btn btn-secondary" onclick="esimAction('notifretrieve')">获取待处理通知</button></div>
+          <div class="result-box" id="esimNotifResult"></div>
+        </div>
+      </div>
+    </div>
+
     <!-- ===== AT Terminal ===== -->
     <div class="panel" id="panel-atterm">
       <h1 class="page-title">AT 指令终端</h1>
@@ -566,6 +596,82 @@ const char* htmlPage = R"rawliteral(
         if(d.success){resultEl.className='result-box result-success';resultEl.innerHTML=name+'成功: '+d.message;}
         else{resultEl.className='result-box result-error';resultEl.innerHTML=name+'失败: '+d.message;}
       }).catch(function(e){resultEl.className='result-box result-error';resultEl.textContent='请求失败: '+e;});
+    }
+
+    // ---- eSIM Management ----
+    function esimAction(action){
+      var resultEl=null;
+      var names={'info':'查询eSIM信息','list':'刷新配置列表','notifcount':'查询通知数量','notifretrieve':'获取待处理通知'};
+      var name=names[action]||action;
+      
+      if(action==='info') resultEl=document.getElementById('esimInfoResult');
+      else if(action==='list') resultEl=document.getElementById('esimListResult');
+      else if(action==='notifcount'||action==='notifretrieve') resultEl=document.getElementById('esimNotifResult');
+      else resultEl=document.getElementById('esimInfoResult');
+      
+      resultEl.className='result-box result-loading';resultEl.textContent=name+'中...';
+      
+      fetch('/esim?action='+action).then(function(rr){return rr.json()}).then(function(d){
+        if(d.success){
+          resultEl.className='result-box result-success';
+          if(action==='info'){
+            resultEl.innerHTML='<table class="info-table">'+d.message+'</table>';
+          } else if(action==='list'){
+            if(d.profiles && d.profiles.length > 0){
+              var html='<table class="info-table">';
+              html+='<tr><th>ICCID</th><th>昵称</th><th>状态</th><th>操作</th></tr>';
+              for(var i=0;i<d.profiles.length;i++){
+                var p=d.profiles[i];
+                var stateStr=p.state==1?'<span style="color:#4CAF50">已启用</span>':'<span style="color:#888">已禁用</span>';
+                html+='<tr><td>'+p.iccid+'</td><td>'+(p.nickname||'-')+'</td><td>'+stateStr+'</td>';
+                html+='<td>';
+                if(p.state==1){
+                  html+='<button class="btn btn-danger btn-sm" onclick="esimEnableDisable(\''+p.iccid+'\',false)">禁用</button>';
+                } else {
+                  html+='<button class="btn btn-primary btn-sm" onclick="esimEnableDisable(\''+p.iccid+'\',true)">启用</button>';
+                  html+=' <button class="btn btn-danger btn-sm" onclick="esimDelete(\''+p.iccid+'\')">删除</button>';
+                }
+                html+='</td></tr>';
+              }
+              html+='</table>';
+              document.getElementById('esimProfileList').innerHTML=html;
+            } else {
+              document.getElementById('esimProfileList').innerHTML='<p class="form-hint">未找到eSIM配置文件</p>';
+            }
+            resultEl.innerHTML='共找到 '+d.count+' 个配置文件';
+          } else {
+            resultEl.innerHTML=d.message;
+          }
+        } else {
+          resultEl.className='result-box result-error';
+          resultEl.innerHTML=name+'失败: '+d.message;
+        }
+      }).catch(function(e){resultEl.className='result-box result-error';resultEl.textContent='请求失败: '+e;});
+    }
+
+    function esimEnableDisable(iccid, enable){
+      if(!confirm(enable?'确定要启用此eSIM配置吗？':'确定要禁用此eSIM配置吗？'))return;
+      var action=enable?'enable':'disable';
+      fetch('/esim?action='+action+'&iccid='+encodeURIComponent(iccid)).then(function(rr){return rr.json()}).then(function(d){
+        if(d.success){
+          alert(d.message);
+          esimAction('list');
+        } else {
+          alert('操作失败: '+d.message);
+        }
+      }).catch(function(e){alert('请求失败: '+e);});
+    }
+
+    function esimDelete(iccid){
+      if(!confirm('确定要删除此eSIM配置吗？此操作不可恢复！'))return;
+      fetch('/esim?action=delete&iccid='+encodeURIComponent(iccid)).then(function(rr){return rr.json()}).then(function(d){
+        if(d.success){
+          alert(d.message);
+          esimAction('list');
+        } else {
+          alert('删除失败: '+d.message);
+        }
+      }).catch(function(e){alert('请求失败: '+e);});
     }
 
     // ---- AT Terminal ----

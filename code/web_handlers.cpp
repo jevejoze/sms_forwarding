@@ -1110,3 +1110,124 @@ void handleWifi() {
   }
   busy = false;
 }
+
+// eSIM Management
+void handleESim() {
+  if (!checkAuth()) return;
+  
+  String action = server.arg("action");
+  String json = "{";
+  bool success = false;
+  String message = "";
+  String profiles = "";
+  int count = 0;
+  
+  if (action == "info") {
+    logCaptureLn(String("网页端查询eSIM信息..."));
+    
+    char eid[32];
+    if (esimGetEID(eid, sizeof(eid))) {
+      success = true;
+      message += "<tr><td>EID</td><td>" + String(eid) + "</td></tr>";
+      
+      int notifCount;
+      if (esimGetNotificationCount(&notifCount)) {
+        message += "<tr><td>待处理通知</td><td>" + String(notifCount) + "</td></tr>";
+      }
+      
+      ESimProfile profiles[10];
+      int profileCount = esimGetProfiles(profiles, 10);
+      message += "<tr><td>配置文件数量</td><td>" + String(profileCount) + "</td></tr>";
+    } else {
+      message = esimGetLastError();
+    }
+  }
+  else if (action == "list") {
+    logCaptureLn(String("网页端获取eSIM配置列表..."));
+    
+    ESimProfile profileList[10];
+    count = esimGetProfiles(profileList, 10);
+    
+    if (count >= 0) {
+      success = true;
+      profiles = "[";
+      for (int i = 0; i < count; i++) {
+        if (i > 0) profiles += ",";
+        profiles += "{";
+        profiles += "\"iccid\":\"" + String(profileList[i].iccid) + "\",";
+        profiles += "\"nickname\":\"" + String(profileList[i].nickname) + "\",";
+        profiles += "\"state\":" + String(profileList[i].state) + ",";
+        profiles += "\"profileClass\":" + String(profileList[i].profileClass) + ",";
+        profiles += "\"serviceProviderName\":\"" + String(profileList[i].serviceProviderName) + "\",";
+        profiles += "\"profileName\":\"" + String(profileList[i].profileName) + "\"";
+        profiles += "}";
+      }
+      profiles += "]";
+      message = "成功获取配置列表";
+    } else {
+      message = esimGetLastError();
+    }
+  }
+  else if (action == "enable") {
+    String iccid = server.arg("iccid");
+    logCaptureLn(String("网页端启用eSIM配置: ") + iccid);
+    
+    if (esimEnableProfile(iccid.c_str())) {
+      success = true;
+      message = "eSIM配置已启用: " + iccid;
+    } else {
+      message = esimGetLastError();
+    }
+  }
+  else if (action == "disable") {
+    String iccid = server.arg("iccid");
+    logCaptureLn(String("网页端禁用eSIM配置: ") + iccid);
+    
+    if (esimDisableProfile(iccid.c_str())) {
+      success = true;
+      message = "eSIM配置已禁用: " + iccid;
+    } else {
+      message = esimGetLastError();
+    }
+  }
+  else if (action == "delete") {
+    String iccid = server.arg("iccid");
+    logCaptureLn(String("网页端删除eSIM配置: ") + iccid);
+    
+    if (esimDeleteProfile(iccid.c_str())) {
+      success = true;
+      message = "eSIM配置已删除: " + iccid;
+    } else {
+      message = esimGetLastError();
+    }
+  }
+  else if (action == "notifcount") {
+    logCaptureLn(String("网页端查询eSIM通知数量..."));
+    
+    int notifCount;
+    if (esimGetNotificationCount(&notifCount)) {
+      success = true;
+      message = "待处理通知数量: " + String(notifCount);
+    } else {
+      message = esimGetLastError();
+    }
+  }
+  else if (action == "notifretrieve") {
+    logCaptureLn(String("网页端获取eSIM待处理通知..."));
+    message = "通知获取功能开发中...";
+    success = true;
+  }
+  else {
+    message = "未知操作: " + action;
+  }
+  
+  json += "\"success\":" + String(success ? "true" : "false") + ",";
+  json += "\"message\":\"" + jsonEscape(message) + "\"";
+  if (profiles.length() > 0) {
+    json += ",\"profiles\":" + profiles;
+    json += ",\"count\":" + String(count);
+  }
+  json += "}";
+  
+  server.send(200, "application/json", json);
+}
