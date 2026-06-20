@@ -17,6 +17,7 @@ static const uint8_t ESIM_ISD_R_AID[] = {
 
 static char s_lastError[128] = "";
 static bool s_esimReady = false;
+static int s_lastProfileResult = 0;
 
 struct TlvNode {
   uint32_t tag;
@@ -771,6 +772,7 @@ static const char* profileOperationReason(int ret, bool enable) {
     case 2: return enable ? "profile 不是禁用状态" : "profile 不是启用状态";
     case 3: return "被 profile 策略禁止";
     case 4: return "错误的 profile 重新启用操作";
+    case 5: return "CAT busy/终端忙，可能需要稍后重试或使用无刷新切换";
     case -1: return "内部错误，可能是 ICCID/AID 编码非法";
     default: return "未知错误";
   }
@@ -806,6 +808,7 @@ static bool buildProfileIdentifier(const char* idText, uint8_t* out, size_t outS
 }
 
 static bool profileOperation(uint32_t outerTag, const char* idText, bool refresh, bool enableForReason) {
+  s_lastProfileResult = 0;
   uint8_t idTlv[24];
   size_t idTlvLen = 0;
   if (!buildProfileIdentifier(idText, idTlv, sizeof(idTlv), &idTlvLen)) return false;
@@ -832,6 +835,7 @@ static bool profileOperation(uint32_t outerTag, const char* idText, bool refresh
                 top.tag == outerTag &&
                 findChildTag(top.value, top.length, 0x80, &resultNode);
   int ret = parsed ? (int)parseInteger(resultNode.value, resultNode.length) : -1;
+  s_lastProfileResult = ret;
   free(resp);
 
   if (!parsed) {
@@ -858,7 +862,19 @@ bool esimDeleteProfile(const char* iccidOrAid) {
 }
 
 bool esimSwitchProfile(const char* iccidOrAid) {
-  return esimEnableProfile(iccidOrAid);
+  if (profileOperation(0xBF31, iccidOrAid, true, true)) {
+    return true;
+  }
+
+  if (s_lastProfileResult == 5) {
+    logCaptureLn(String("eSIM 切换返回 CAT busy，改用 refresh=false 重试"));
+    if (profileOperation(0xBF31, iccidOrAid, false, true)) {
+      logCaptureLn(String("eSIM 无刷新切换成功，可能需要重启模组/重新注册网络后生效"));
+      return true;
+    }
+  }
+
+  return false;
 }
 
 bool esimGetNotificationCount(int* count) {
