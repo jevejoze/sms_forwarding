@@ -522,6 +522,7 @@ static bool es10xCommand(const uint8_t* derReq, size_t derReqLen, uint8_t** out,
   bool ok = false;
   uint8_t cla = classByteForChannel(channel);
   uint8_t apdu[260];
+  int chunkNo = 0;
   if (derReqLen > 255) {
     setError("请求过长，当前 Arduino 实现只支持短 APDU");
     goto done;
@@ -534,7 +535,6 @@ static bool es10xCommand(const uint8_t* derReq, size_t derReqLen, uint8_t** out,
   apdu[4] = (uint8_t)derReqLen;
   memcpy(apdu + 5, derReq, derReqLen);
 
-  int chunkNo = 0;
   while (true) {
     chunkNo++;
     unsigned long chunkStarted = millis();
