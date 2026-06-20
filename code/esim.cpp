@@ -95,37 +95,6 @@ static bool extractLongestHexRun(const String& input, String* hex) {
   return true;
 }
 
-static bool expectedTlvHexLength(const String& hex, size_t* expectedHexLen) {
-  if (hex.length() < 4 || !isHexChar(hex.charAt(0)) || !isHexChar(hex.charAt(1))) return false;
-  int pos = 2;
-  uint8_t firstTag = (hexNibble(hex.charAt(0)) << 4) | hexNibble(hex.charAt(1));
-  if ((firstTag & 0x1F) == 0x1F) {
-    while (pos + 2 <= hex.length()) {
-      uint8_t tagByte = (hexNibble(hex.charAt(pos)) << 4) | hexNibble(hex.charAt(pos + 1));
-      pos += 2;
-      if ((tagByte & 0x80) == 0) break;
-    }
-  }
-  if (pos + 2 > hex.length()) return false;
-  uint8_t lenByte = (hexNibble(hex.charAt(pos)) << 4) | hexNibble(hex.charAt(pos + 1));
-  pos += 2;
-
-  size_t valueLen = 0;
-  if ((lenByte & 0x80) == 0) {
-    valueLen = lenByte;
-  } else {
-    uint8_t lenBytes = lenByte & 0x7F;
-    if (lenBytes == 0 || lenBytes > 3 || pos + lenBytes * 2 > hex.length()) return false;
-    for (uint8_t i = 0; i < lenBytes; i++) {
-      valueLen = (valueLen << 8) | ((hexNibble(hex.charAt(pos)) << 4) | hexNibble(hex.charAt(pos + 1)));
-      pos += 2;
-    }
-  }
-
-  *expectedHexLen = pos + valueLen * 2 + 4; // TLV + SW1/SW2
-  return true;
-}
-
 static String bytesToHex(const uint8_t* data, size_t len) {
   static const char digits[] = "0123456789ABCDEF";
   String out;
@@ -488,18 +457,6 @@ static bool transmitApdu(const String& channel, const uint8_t* tx, size_t txLen,
     }
   }
 
-  size_t expectedHexLen = 0;
-  bool hasMoreStatus = hex.length() >= 4 &&
-                       hex.charAt(hex.length() - 4) == '6' &&
-                       hex.charAt(hex.length() - 3) == '1';
-  if (isHexString(hex) && expectedTlvHexLength(hex, &expectedHexLen) &&
-      hex.length() < expectedHexLen && !hasMoreStatus) {
-    setError(String("CGLA 响应疑似截断: 当前HEX长度=") + String(hex.length()) +
-             ", 期望至少=" + String(expectedHexLen) +
-             "，请确认 SERIAL_BUFFER_SIZE 已生效并重启模组");
-    return false;
-  }
-
   size_t maxLen = hex.length() / 2;
   uint8_t* buf = (uint8_t*)malloc(maxLen);
   if (!buf) {
@@ -575,10 +532,14 @@ static bool es10xCommand(const uint8_t* derReq, size_t derReqLen, uint8_t** out,
 
     uint8_t sw1 = rx[rxLen - 2];
     uint8_t sw2 = rx[rxLen - 1];
+    logCaptureLn(String("eSIM APDU 分片: data=") + String(rxLen - 2) +
+                 " bytes, SW=" + bytesToHex(rx + rxLen - 2, 2) +
+                 ", totalBefore=" + String(*outLen));
     if (!appendResponseData(out, outLen, rx, rxLen - 2)) {
       free(rx);
       goto done;
     }
+    logCaptureLn(String("eSIM APDU 累计响应: ") + String(*outLen) + " bytes");
     free(rx);
 
     if (sw1 == 0x61) {

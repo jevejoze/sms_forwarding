@@ -11,50 +11,10 @@
 #include "web_handlers.h"
 #include "esim.h"
 
-void setup() {
-  pinMode(LED_BUILTIN, OUTPUT);
-  digitalWrite(LED_BUILTIN, HIGH);
-  Serial.begin(115200);
-  // 缩短初始化延时，WiFi连接会处理自己的超时
-  delay(200);
-  Serial1.begin(115200, SERIAL_8N1, RXD, TXD);
-  Serial1.setRxBufferSize(SERIAL_BUFFER_SIZE);
-  while (Serial1.available()) Serial1.read();
-  modemPowerCycle();
-  while (Serial1.available()) Serial1.read();
-  initConcatBuffer();
-  loadConfig();
-  configValid = isConfigValid();
+static bool httpStarted = false;
 
-  // ---- WiFi 连接优化 ----
-  WiFi.mode(WIFI_STA);
-  WiFi.setSleep(false);                    // 关闭 Modem Sleep，提高连接响应速度
-  WiFi.setAutoReconnect(true);             // 断线后自动重连
-  // 使用快速扫描而非全信道扫描（全信道扫描在空信道上等待超时极慢）
-  // 首次连接成功后 ESP32 会自动记住信道，下次启动更快
-  WiFi.setScanMethod(WIFI_FAST_SCAN);
-  WiFi.setSortMethod(WIFI_CONNECT_AP_BY_SIGNAL);
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
-  logCaptureLn(String("连接wifi: ") + String(WIFI_SSID));
-
-  // 带超时的等待连接，失败则重启重试
-  unsigned long wifiStart = millis();
-  const unsigned long WIFI_TIMEOUT = 20000; // 20秒超时
-  while (WiFi.status() != WL_CONNECTED && millis() - wifiStart < WIFI_TIMEOUT) {
-    blink_short(200);
-  }
-
-  if (WiFi.status() == WL_CONNECTED) {
-    logCaptureLn(String("wifi已连接"));
-    logCapture(String("IP地址: "));
-    logCaptureLn(WiFi.localIP().toString());
-    logCapture(String("信号强度(RSSI): "));
-    logCaptureLn(String(WiFi.RSSI()) + " dBm");
-  } else {
-    logCaptureLn(String("⚠️ WiFi连接超时，即将重启重试..."));
-    delay(1000);
-    ESP.restart();
-  }
+static void startHttpServer() {
+  if (httpStarted) return;
 
   server.on("/", handleRoot);
   server.on("/save", HTTP_POST, handleSave);
@@ -70,7 +30,60 @@ void setup() {
   server.on("/wifi", handleWifi);
   server.on("/esim", handleESim);
   server.begin();
-  logCaptureLn(String("HTTP服务器已启动"));
+
+  httpStarted = true;
+  logCaptureLn(String("HTTP服务器已启动，等待 WiFi 获取 IP"));
+}
+
+void setup() {
+  pinMode(LED_BUILTIN, OUTPUT);
+  digitalWrite(LED_BUILTIN, HIGH);
+  Serial.begin(115200);
+  // 缩短初始化延时，WiFi连接会处理自己的超时
+  delay(200);
+  Serial1.begin(115200, SERIAL_8N1, RXD, TXD);
+  Serial1.setRxBufferSize(SERIAL_BUFFER_SIZE);
+  while (Serial1.available()) Serial1.read();
+  initConcatBuffer();
+  loadConfig();
+  configValid = isConfigValid();
+  startHttpServer();
+
+  // ---- WiFi 连接优化 ----
+  WiFi.mode(WIFI_STA);
+  WiFi.setSleep(false);                    // 关闭 Modem Sleep，提高连接响应速度
+  WiFi.setAutoReconnect(true);             // 断线后自动重连
+  // 使用快速扫描而非全信道扫描（全信道扫描在空信道上等待超时极慢）
+  // 首次连接成功后 ESP32 会自动记住信道，下次启动更快
+  WiFi.setScanMethod(WIFI_FAST_SCAN);
+  WiFi.setSortMethod(WIFI_CONNECT_AP_BY_SIGNAL);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  logCaptureLn(String("连接wifi: ") + String(WIFI_SSID));
+
+  // 带超时的等待连接，失败则重启重试
+  unsigned long wifiStart = millis();
+  unsigned long lastBlink = 0;
+  const unsigned long WIFI_TIMEOUT = 20000; // 20秒超时
+  while (WiFi.status() != WL_CONNECTED && millis() - wifiStart < WIFI_TIMEOUT) {
+    if (millis() - lastBlink >= 250) {
+      lastBlink = millis();
+      digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
+    }
+    server.handleClient();
+    delay(25);
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    logCaptureLn(String("wifi已连接"));
+    logCapture(String("IP地址: "));
+    logCaptureLn(WiFi.localIP().toString());
+    logCapture(String("信号强度(RSSI): "));
+    logCaptureLn(String(WiFi.RSSI()) + " dBm");
+  } else {
+    logCaptureLn(String("⚠️ WiFi连接超时，即将重启重试..."));
+    delay(1000);
+    ESP.restart();
+  }
 
   // ---- NTP 时间同步 ----
   logCaptureLn(String("正在同步NTP时间..."));
@@ -101,6 +114,10 @@ void setup() {
     String body = "设备已启动\n设备地址: " + getDeviceUrl();
     sendEmailNotification(subject.c_str(), body.c_str());
   }
+
+  // ---- 模组上电（放到 Web 可访问之后，避免拖慢后台启动）----
+  modemPowerCycle();
+  while (Serial1.available()) Serial1.read();
 
   // ---- eSIM初始化 ----
   logCaptureLn(String("初始化eSIM..."));
