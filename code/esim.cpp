@@ -189,42 +189,103 @@ static void appendTlv(uint8_t* out, size_t* pos, uint32_t tag, const uint8_t* va
   }
 }
 
+static String compactAtResponse(const String& resp) {
+  String out = resp;
+  out.replace("\r", " ");
+  out.replace("\n", " ");
+  out.trim();
+  while (out.indexOf("  ") >= 0) out.replace("  ", " ");
+  if (out.length() > 220) {
+    out = out.substring(0, 220) + "...";
+  }
+  return out;
+}
+
+static bool isIgnorableAtLine(const String& line) {
+  if (line.length() == 0) return true;
+  if (line == "OK" || line == "ERROR") return true;
+  if (line.startsWith("AT")) return true;
+  if (line.startsWith("+CME ERROR") || line.startsWith("+CMS ERROR")) return true;
+  return false;
+}
+
+static bool firstDataLine(const String& resp, String* payload) {
+  int start = 0;
+  while (start <= resp.length()) {
+    int end = resp.indexOf('\n', start);
+    if (end < 0) end = resp.length();
+    String line = resp.substring(start, end);
+    line.trim();
+    if (!isIgnorableAtLine(line)) {
+      *payload = line;
+      return true;
+    }
+    if (end == resp.length()) break;
+    start = end + 1;
+  }
+  return false;
+}
+
+static void stripAtTerminator(String* line) {
+  line->trim();
+  if (line->endsWith("OK")) {
+    *line = line->substring(0, line->length() - 2);
+    line->trim();
+  }
+  if (line->endsWith("ERROR")) {
+    *line = line->substring(0, line->length() - 5);
+    line->trim();
+  }
+}
+
 static bool parseAtPayload(const String& resp, const char* prefix, String* payload) {
   int idx = resp.indexOf(prefix);
-  if (idx < 0) return false;
-  int start = idx + strlen(prefix);
-  int end = resp.indexOf('\n', start);
-  if (end < 0) end = resp.length();
-  String line = resp.substring(start, end);
-  line.trim();
-  if (line.length() == 0) return false;
-  *payload = line;
-  return true;
+  if (idx >= 0) {
+    int start = idx + strlen(prefix);
+    int end = resp.indexOf('\n', start);
+    if (end < 0) end = resp.length();
+    String line = resp.substring(start, end);
+    line.trim();
+    if (line.length() > 0) {
+      stripAtTerminator(&line);
+      *payload = line;
+      return true;
+    }
+  }
+  if (!firstDataLine(resp, payload)) return false;
+  stripAtTerminator(payload);
+  return payload->length() > 0;
 }
 
 static bool openChannel(String* channel) {
   String aidHex = bytesToHex(ESIM_ISD_R_AID, sizeof(ESIM_ISD_R_AID));
+  logCaptureLn(String("eSIM CCHO TX: 打开 ISD-R 通道"));
   String resp = sendATCommand((String("AT+CCHO=\"") + aidHex + "\"").c_str(), 10000);
+  logCaptureLn(String("eSIM CCHO RX: ") + compactAtResponse(resp));
   String payload;
   if (!parseAtPayload(resp, "+CCHO:", &payload)) {
-    setError(String("打开 eUICC 通道失败: ") + resp);
+    setError(String("打开 eUICC 通道失败，无法解析响应: ") + compactAtResponse(resp));
     return false;
   }
   payload.trim();
   if (payload.length() >= 2 && payload.charAt(0) == '"' && payload.charAt(payload.length() - 1) == '"') {
     payload = payload.substring(1, payload.length() - 1);
   }
-  if (payload.length() == 0) {
-    setError("打开 eUICC 通道返回空通道号");
+  int channelId = payload.toInt();
+  if (payload.length() == 0 || channelId <= 0) {
+    setError(String("打开 eUICC 通道返回无效通道号: ") + payload);
     return false;
   }
-  *channel = payload;
+  *channel = String(channelId);
+  logCaptureLn(String("eSIM 通道已打开: ") + *channel);
   return true;
 }
 
 static void closeChannel(const String& channel) {
   if (channel.length() == 0) return;
-  sendATCommand((String("AT+CCHC=") + channel).c_str(), 5000);
+  logCaptureLn(String("eSIM CCHC TX: 关闭通道 ") + channel);
+  String resp = sendATCommand((String("AT+CCHC=") + channel).c_str(), 5000);
+  logCaptureLn(String("eSIM CCHC RX: ") + compactAtResponse(resp));
 }
 
 static bool transmitApdu(const String& channel, const uint8_t* tx, size_t txLen, uint8_t** rx, size_t* rxLen) {
@@ -232,19 +293,26 @@ static bool transmitApdu(const String& channel, const uint8_t* tx, size_t txLen,
   *rxLen = 0;
   String txHex = bytesToHex(tx, txLen);
   String cmd = "AT+CGLA=" + channel + "," + String(txHex.length()) + ",\"" + txHex + "\"";
+  logCaptureLn(String("eSIM CGLA TX: channel=") + channel + ", bytes=" + String(txLen));
   String resp = sendATCommand(cmd.c_str(), 30000);
+  logCaptureLn(String("eSIM CGLA RX: ") + compactAtResponse(resp));
   String payload;
   if (!parseAtPayload(resp, "+CGLA:", &payload)) {
-    setError(String("APDU 传输失败: ") + resp);
+    setError(String("APDU 传输失败，无法解析响应: ") + compactAtResponse(resp));
     return false;
   }
 
   int comma = payload.indexOf(',');
   if (comma < 0) {
-    setError(String("无法解析 CGLA 响应: ") + payload);
-    return false;
+    // Some modems return only the response APDU HEX without the leading length.
+    if (isHexString(payload)) {
+      comma = -1;
+    } else {
+      setError(String("无法解析 CGLA 响应: ") + payload);
+      return false;
+    }
   }
-  String hex = payload.substring(comma + 1);
+  String hex = comma >= 0 ? payload.substring(comma + 1) : payload;
   hex.trim();
   if (hex.length() >= 2 && hex.charAt(0) == '"' && hex.charAt(hex.length() - 1) == '"') {
     hex = hex.substring(1, hex.length() - 1);
@@ -372,7 +440,9 @@ bool esimInit() {
 
   const char* commands[] = {"AT+CCHO=?", "AT+CCHC=?", "AT+CGLA=?"};
   for (int i = 0; i < 3; i++) {
+    logCaptureLn(String("eSIM 能力检测 TX: ") + commands[i]);
     resp = sendATCommand(commands[i], 3000);
+    logCaptureLn(String("eSIM 能力检测 RX: ") + compactAtResponse(resp));
     if (resp.indexOf("OK") < 0) {
       setError(String("模组不支持 eUICC AT 命令 ") + commands[i] + ": " + resp);
       s_esimReady = false;
