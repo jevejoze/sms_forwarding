@@ -7,6 +7,10 @@
 #define ESIM_MAX_ISDP_AID_LEN 33
 #define ESIM_MAX_NAME_LEN 64
 
+#ifndef ESIM_PROFILE_LOG
+#define ESIM_PROFILE_LOG 0
+#endif
+
 struct ESimProfile {
   char iccid[ESIM_MAX_ICCID_LEN];
   char isdpAid[ESIM_MAX_ISDP_AID_LEN];
