@@ -609,23 +609,29 @@ done:
   return ok;
 }
 
-// bool esimInit() {
-//   setError("");
+bool esimInit() {
+  setError("");
+  String resp = sendESimATCommand("AT", 2000);
+  if (resp.indexOf("OK") < 0) {
+    setError(String("模组 AT 无响应: ") + resp);
+    s_esimReady = false;
+    return false;
+  }
 
-//   const char* commands[] = {"AT+CCHO=?", "AT+CCHC=?", "AT+CGLA=?"};
-//   for (int i = 0; i < 3; i++) {
-//     logCaptureLn(String("eSIM 能力检测 TX: ") + commands[i]);
-//     resp = sendESimATCommand(commands[i], 3000);
-//     logCaptureLn(String("eSIM 能力检测 RX: ") + compactAtResponse(resp));
-//     if (resp.indexOf("OK") < 0) {
-//       setError(String("模组不支持 eUICC AT 命令 ") + commands[i] + ": " + resp);
-//       s_esimReady = false;
-//       return false;
-//     }
-//   }
-//   s_esimReady = true;
-//   return true;
-// }
+  const char* commands[] = {"AT+CCHO=?", "AT+CCHC=?", "AT+CGLA=?"};
+  for (int i = 0; i < 3; i++) {
+    logCaptureLn(String("eSIM 能力检测 TX: ") + commands[i]);
+    resp = sendESimATCommand(commands[i], 3000);
+    logCaptureLn(String("eSIM 能力检测 RX: ") + compactAtResponse(resp));
+    if (resp.indexOf("OK") < 0) {
+      setError(String("模组不支持 eUICC AT 命令 ") + commands[i] + ": " + resp);
+      s_esimReady = false;
+      return false;
+    }
+  }
+  s_esimReady = true;
+  return true;
+}
 
 bool esimGetEID(char* eid, size_t bufferSize) {
   if (!eid || bufferSize == 0) return false;
@@ -767,7 +773,6 @@ static const char* profileOperationReason(int ret, bool enable) {
     case 3: return "被 profile 策略禁止";
     case 4: return "错误的 profile 重新启用操作";
     case 5: return "CAT busy/终端忙，可能需要稍后重试或使用无刷新切换";
-    case 0x7F: return "未定义/不支持的 profile 操作结果";
     case -1: return "内部错误，可能是 ICCID/AID 编码非法";
     default: return "未知错误";
   }
@@ -847,7 +852,7 @@ static bool profileOperation(uint32_t outerTag, const char* idText, bool refresh
     return false;
   }
   if (ret != 0) {
-    setError(String(profileOperationReason(ret, enableForReason)) + " (result=" + String(ret) + ")");
+    setError(profileOperationReason(ret, enableForReason));
     return false;
   }
   return true;
@@ -866,47 +871,27 @@ bool esimDeleteProfile(const char* iccidOrAid) {
 }
 
 bool esimSwitchProfile(const char* iccidOrAid) {
-  String target = String(iccidOrAid ? iccidOrAid : "");
-  target.trim();
-  if (target.length() == 0) {
-    setError("ICCID/AID 不能为空");
-    return false;
-  }
-
-  ESimProfile profiles[10];
-  int count = esimGetProfiles(profiles, 10);
-  if (count < 0) {
-    return false;
-  }
-
-  const char* currentId = NULL;
-  for (int i = 0; i < count; i++) {
-    if (profiles[i].state == 1) {
-      currentId = profiles[i].iccid[0] ? profiles[i].iccid : profiles[i].isdpAid;
-      break;
-    }
-  }
-
-  if (currentId && target.equals(currentId)) {
-    logCaptureLn(String("eSIM目标profile已启用，无需切换: ") + target);
+  if (profileOperation(0xBF31, iccidOrAid, true, true)) {
     return true;
   }
 
-  if (currentId && currentId[0]) {
-    logCaptureLn(String("eSIM先禁用当前profile: ") + currentId);
-    if (!profileOperation(0xBF32, currentId, false, false)) {
-      return false;
+  if (s_lastProfileResult == 5) {
+    logCaptureLn(String("eSIM 切换返回 CAT busy，改用 refresh=false 重试"));
+    if (profileOperation(0xBF31, iccidOrAid, false, true)) {
+      logCaptureLn(String("eSIM 无刷新切换成功，可能需要重启模组/重新注册网络后生效"));
+      return true;
     }
-    delay(1000);
   }
 
-  logCaptureLn(String("eSIM启用目标profile: ") + target);
-  if (!profileOperation(0xBF31, target.c_str(), false, true)) {
-    return false;
+  if (s_lastProfileResult == 5) {
+    logCaptureLn(String("eSIM 仍返回 CAT busy，改用 lpac 兼容格式 refresh=false 重试"));
+    if (profileOperation(0xBF31, iccidOrAid, false, true, true)) {
+      logCaptureLn(String("eSIM lpac兼容格式切换成功，可能需要重启模组/重新注册网络后生效"));
+      return true;
+    }
   }
 
-  logCaptureLn(String("eSIM切换完成，可能需要重启模组/重新注册网络后生效"));
-  return true;
+  return false;
 }
 
 bool esimGetNotificationCount(int* count) {
