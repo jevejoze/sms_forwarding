@@ -72,6 +72,45 @@ bool checkAuth() {
   return true;
 }
 
+// HTML 属性/文本转义，防止配置值中的引号等破坏页面结构
+static String htmlEscape(const String& s) {
+  String r;
+  r.reserve(s.length() + 8);
+  for (unsigned int i = 0; i < s.length(); i++) {
+    char c = s.charAt(i);
+    switch (c) {
+      case '&': r += "&amp;"; break;
+      case '"': r += "&quot;"; break;
+      case '<': r += "&lt;"; break;
+      case '>': r += "&gt;"; break;
+      default: r += c;
+    }
+  }
+  return r;
+}
+
+static String pushTypeOption(int value, const char* label, PushType current) {
+  return "<option value=\"" + String(value) + "\"" +
+         (current == (PushType)value ? " selected" : "") + ">" + label + "</option>";
+}
+
+static void appendPushTypeOptions(String& html, PushType current) {
+  html += pushTypeOption(PUSH_TYPE_POST_JSON, "POST JSON（通用格式）", current);
+  html += pushTypeOption(PUSH_TYPE_BARK, "Bark（iOS推送）", current);
+  html += pushTypeOption(PUSH_TYPE_GET, "GET 请求", current);
+  html += pushTypeOption(PUSH_TYPE_DINGTALK, "钉钉机器人", current);
+  html += pushTypeOption(PUSH_TYPE_PUSHPLUS, "PushPlus", current);
+  html += pushTypeOption(PUSH_TYPE_SERVERCHAN, "Server酱", current);
+  html += pushTypeOption(PUSH_TYPE_CUSTOM, "自定义模板", current);
+  html += pushTypeOption(PUSH_TYPE_FEISHU, "飞书机器人", current);
+  html += pushTypeOption(PUSH_TYPE_GOTIFY, "Gotify", current);
+  html += pushTypeOption(PUSH_TYPE_TELEGRAM, "Telegram Bot", current);
+}
+
+static bool isValidPushType(int typeVal) {
+  return typeVal >= PUSH_TYPE_POST_JSON && typeVal <= PUSH_TYPE_TELEGRAM;
+}
+
 // 处理配置页面请求
 void handleRoot() {
   if (!checkAuth()) return;
@@ -104,13 +143,20 @@ void handleRoot() {
     if (config.pushChannels[i].enabled) pushCount++;
   }
   html.replace("%PUSH_COUNT%", String(pushCount));
+  html.replace("%MAX_PUSH_CHANNELS%", String(MAX_PUSH_CHANNELS));
   
   // 生成推送通道HTML
   String channelsHtml = "";
   for (int i = 0; i < MAX_PUSH_CHANNELS; i++) {
+    const PushChannel& ch = config.pushChannels[i];
     String idx = String(i);
-    String enabledClass = config.pushChannels[i].enabled ? " enabled" : "";
-    String checked = config.pushChannels[i].enabled ? " checked" : "";
+    String enabledClass = ch.enabled ? " enabled" : "";
+    String checked = ch.enabled ? " checked" : "";
+    String nameEsc = htmlEscape(ch.name);
+    String urlEsc = htmlEscape(ch.url);
+    String key1Esc = htmlEscape(ch.key1);
+    String key2Esc = htmlEscape(ch.key2);
+    String bodyEsc = htmlEscape(ch.customBody);
     
     channelsHtml += "<div class=\"push-channel" + enabledClass + "\" id=\"channel" + idx + "\">";
     channelsHtml += "<div class=\"push-channel-header\">";
@@ -122,16 +168,14 @@ void handleRoot() {
     // 通道名称
     channelsHtml += "<div class=\"form-group\">";
     channelsHtml += "<label>通道名称</label>";
-    channelsHtml += "<input type=\"text\" name=\"push" + idx + "name\" value=\"" + config.pushChannels[i].name + "\" placeholder=\"自定义名称\">";
+    channelsHtml += "<input type=\"text\" name=\"push" + idx + "name\" value=\"" + nameEsc + "\" placeholder=\"自定义名称\">";
     channelsHtml += "</div>";
     
-    // 推送类型
+    // 推送类型（须与 updateTypeHint 及 PushType 枚举一致）
     channelsHtml += "<div class=\"form-group\">";
     channelsHtml += "<label>推送方式</label>";
     channelsHtml += "<select name=\"push" + idx + "type\" id=\"push" + idx + "type\" onchange=\"updateTypeHint(" + idx + ")\">";
-    channelsHtml += "<option value=\"1\"" + String(config.pushChannels[i].type == PUSH_TYPE_POST_JSON ? " selected" : "") + ">POST JSON（通用格式）</option>";
-    channelsHtml += "<option value=\"2\"" + String(config.pushChannels[i].type == PUSH_TYPE_BARK ? " selected" : "") + ">Bark（iOS推送）</option>";
-    channelsHtml += "<option value=\"8\"" + String(config.pushChannels[i].type == PUSH_TYPE_FEISHU ? " selected" : "") + ">飞书机器人</option>";
+    appendPushTypeOptions(channelsHtml, ch.type);
     channelsHtml += "</select>";
     channelsHtml += "<div class=\"push-type-hint\" id=\"hint" + idx + "\"></div>";
     channelsHtml += "</div>";
@@ -139,18 +183,18 @@ void handleRoot() {
     // URL
     channelsHtml += "<div class=\"form-group\">";
     channelsHtml += "<label>推送URL/Webhook</label>";
-    channelsHtml += "<input type=\"text\" name=\"push" + idx + "url\" value=\"" + config.pushChannels[i].url + "\" placeholder=\"http://your-server.com/api 或 webhook地址\">";
+    channelsHtml += "<input type=\"text\" name=\"push" + idx + "url\" value=\"" + urlEsc + "\" placeholder=\"http://your-server.com/api 或 webhook地址\">";
     channelsHtml += "</div>";
     
     // 额外参数区域（钉钉/PushPlus/Server酱等需要）
     channelsHtml += "<div id=\"extra" + idx + "\" style=\"display:none;\">";
     channelsHtml += "<div class=\"form-group\">";
     channelsHtml += "<label id=\"key1label" + idx + "\">参数1</label>";
-    channelsHtml += "<input type=\"text\" name=\"push" + idx + "key1\" id=\"key1" + idx + "\" value=\"" + config.pushChannels[i].key1 + "\">";
+    channelsHtml += "<input type=\"text\" name=\"push" + idx + "key1\" id=\"key1" + idx + "\" value=\"" + key1Esc + "\">";
     channelsHtml += "</div>";
     channelsHtml += "<div class=\"form-group\" id=\"key2group" + idx + "\">";
     channelsHtml += "<label id=\"key2label" + idx + "\">参数2</label>";
-    channelsHtml += "<input type=\"text\" name=\"push" + idx + "key2\" id=\"key2" + idx + "\" value=\"" + config.pushChannels[i].key2 + "\">";
+    channelsHtml += "<input type=\"text\" name=\"push" + idx + "key2\" id=\"key2" + idx + "\" value=\"" + key2Esc + "\">";
     channelsHtml += "</div>";
     channelsHtml += "</div>";
     
@@ -158,7 +202,7 @@ void handleRoot() {
     channelsHtml += "<div id=\"custom" + idx + "\" style=\"display:none;\">";
     channelsHtml += "<div class=\"form-group\">";
     channelsHtml += "<label>请求体模板（使用 {sender} {message} {timestamp} 占位符）</label>";
-    channelsHtml += "<textarea name=\"push" + idx + "body\" rows=\"4\" style=\"width:100%;font-family:monospace;\">" + config.pushChannels[i].customBody + "</textarea>";
+    channelsHtml += "<textarea name=\"push" + idx + "body\" rows=\"4\" style=\"width:100%;font-family:monospace;\">" + bodyEsc + "</textarea>";
     channelsHtml += "</div>";
     channelsHtml += "</div>";
     
@@ -894,8 +938,13 @@ void handleSave() {
     if (server.hasArg(enKey) || server.hasArg(typeKey) || server.hasArg(urlKey) ||
         server.hasArg(nameKey) || server.hasArg(k1Key) || server.hasArg(k2Key) ||
         server.hasArg(bodyKey)) {
-      config.pushChannels[i].enabled = server.arg(enKey) == "on";
-      config.pushChannels[i].type = (PushType)server.arg(typeKey).toInt();
+      config.pushChannels[i].enabled = server.hasArg(enKey) && server.arg(enKey) == "on";
+      if (server.hasArg(typeKey)) {
+        int typeVal = server.arg(typeKey).toInt();
+        if (isValidPushType(typeVal)) {
+          config.pushChannels[i].type = (PushType)typeVal;
+        }
+      }
       config.pushChannels[i].url = server.arg(urlKey);
       config.pushChannels[i].name = server.arg(nameKey);
       config.pushChannels[i].key1 = server.arg(k1Key);

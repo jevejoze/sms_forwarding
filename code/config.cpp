@@ -53,6 +53,10 @@ void loadConfig() {
     config.pushChannels[i].key1 = preferences.getString((prefix + "k1").c_str(), "");
     config.pushChannels[i].key2 = preferences.getString((prefix + "k2").c_str(), "");
     config.pushChannels[i].customBody = preferences.getString((prefix + "body").c_str(), "");
+    if (config.pushChannels[i].type < PUSH_TYPE_POST_JSON ||
+        config.pushChannels[i].type > PUSH_TYPE_TELEGRAM) {
+      config.pushChannels[i].type = PUSH_TYPE_POST_JSON;
+    }
   }
   
   // 兼容旧配置：如果有旧的httpUrl配置，迁移到第一个通道

@@ -525,7 +525,7 @@ const char* htmlPage = R"rawliteral(
       else if (type == 10) { hint.innerHTML = 'Telegram Bot<br>Chat ID（参数1）+ Bot Token（参数2）'; extra.style.display='block'; document.getElementById('key1label'+idx).innerText='Chat ID'; document.getElementById('key1'+idx).placeholder='123456789'; if(kg)kg.style.display='block'; document.getElementById('key2label'+idx).innerText='Bot Token'; document.getElementById('key2'+idx).placeholder='12345678:ABC...'; }
     }
     document.addEventListener('DOMContentLoaded', function() {
-      for (var i = 0; i < 5; i++) { toggleChannel(i); updateTypeHint(i); }
+      for (var i = 0; i < %MAX_PUSH_CHANNELS%; i++) { toggleChannel(i); updateTypeHint(i); }
     });
 
     // ---- Send SMS ----
